@@ -1,28 +1,7 @@
-import os, toml, sys, datetime, json
+#!/usr/bin/python3.8
+import os, toml, sys, datetime, json, time, signal
 import tweepy as tw
-
-
-"""
-created_at
-id_str
-text
-metadata/iso_language_code
-user/id
-user/name
-user/screen_name
-user/location
-
-retweeted_status/iso_language_code
-retweeted_status/user/id
-retweeted_status/user/screen_name
-retweeted_status/user/location
-
-http://docs.tweepy.org/en/v3.6.0/api.html#API.search_users
-http://docs.tweepy.org/en/v3.6.0/api.html#API.user_timeline
-
-"""
-
-
+from tqdm import tqdm
 
 
 class TwitterDriver:
@@ -32,12 +11,22 @@ class TwitterDriver:
         self.config_values = self.__parse_keys()
         self.api = self.__create_api_handler()
 
+        self.tw_attrs = ['id_str', 'lang', 'retweeted', 'text']
+        self.user_attr = ['id_str', 'name', 'screen_name', 'description']
+        self.still_compute = True
+        self.closing_requests = 0
+        signal.signal(signal.SIGINT, self.signal_handler)
 
     def __parse_keys(self):
         with open(self.config_f) as f:
             key_values = toml.loads(f.read())
             return key_values
 
+    def signal_handler(self, sig, frame):
+        print('Okay, closing!')
+        self.closing_requests += 1
+        if self.closing_requests > 3: sys.exit()
+        self.still_compute = False
 
 
     def __create_api_handler(self):
@@ -53,47 +42,93 @@ class TwitterDriver:
         return api
 
 
-    def __parse_since_date(self):
-        time_val = self.config_values['query']['time']
-        if type(time_val) is int:
-            return (datetime.datetime.utcnow().date() -
-                    datetime.timedelta(days=time_val)).isoformat()
+    def tweets_ids_from_file(self):
+        cfg =  self.config_values['download_tweets_from_list']
+        init_idx  = cfg['start_by_line']
+        file_name = cfg['tweets_list_file']
 
-        return time_val
+        content = 'h'
+        for i,line in enumerate(open(file_name, 'r')):
+            if i < init_idx:
+                continue
+            if not self.still_compute or len(content) <= 0:
+                break
 
+            content = line.strip()
+            print(f"{i} \t {content} \t", end='')
 
-    def __queries(self):
-        query_attrs = self.config_values['query']
-        q_filter = " -filter " + query_attrs['filter'] if query_attrs['filter'] != [] else ""
-
-        for term in query_attrs['search']:
-            query = term.strip() + q_filter
-            yield query
-
-
-    def __tweets(self, query):
-        # since = self.__parse_since_date()
-        # tweets = tw.Cursor(self.api.search,
-                           # q=query,
-                           # since=since,
-                           # ).items()
-
-        tweets = self.api.user_timeline(user_id="1089609639786889216")
+            time.sleep(0.1)
+            yield i, [content]
 
 
-        for tweet in tweets:
-            yield tweet
+    def __request_tweet_data(self, tw_ids, i):
+        try:
+            result = self.api.statuses_lookup(id_=tw_ids, map_=True)
+            return result
+
+        except tw.RateLimitError:
+            print(f"\nRequest timeout in {i} request")
+            time.sleep(15 * 60)
+            self.__request_tweet_data(tw_ids, i)
+
+        except tw.TweepError:
+            print(f"skipped due error")
+            time.sleep(0.1)
 
 
-    def data(self):
-        for query in self.__queries():
-            for tweet in self.__tweets(query):
-                print(json.dumps(tweet._json , indent=4))
-                # print(tweet)
-                # return
+    def save_user_description(self, user):
+        out_folder = self.config_values['download_tweets_from_list']['save_on']
+        user_description_folder = out_folder+user[0] + '/'
+        os.mkdir(user_description_folder)
+        with open(user_description_folder + f'user-{user[0]}', 'w') as f:
+            user_str = '|'.join(self.user_attr) + '\n'
+            user_str += '|'.join(user)
+            f.writelines(user_str)
+
+
+    def save_tweet_data(self, data, user_id):
+        out_folder = self.config_values['download_tweets_from_list']['save_on']
+        with open(out_folder+user_id+'/'+data[0], 'w') as f:
+            tweet_data = '|'.join(data[:-1]) + '\n' + data[-1]
+            f.writelines(tweet_data)
+
+
+    def persist_into_disk(self, user_data, tweet_data):
+        out_folder = self.config_values['download_tweets_from_list']['save_on']
+        users = set(os.listdir(out_folder))
+        if user_data[0] not in users:
+            self.save_user_description(user_data)
+
+        self.save_tweet_data(tweet_data, user_data[0])
+
+
+    def log_tweet(self, tw_id):
+        file = self.config_values['download_tweets_from_list']['saved_tweets_log']
+        with open(file, 'a') as f:
+            f.write(tw_id)
+
+
+    def __parse_and_save_data(self, result, i):
+        if not result: return
+        for tw in result:
+            try:
+                user_data  = [str(getattr(tw.user, attr, None)) for attr in self.user_attr]
+                tweet_data = [str(getattr(tw, attr, None)) for attr in self.tw_attrs]
+                self.persist_into_disk(user_data, tweet_data)
+                self.log_tweet(tweet_data[0])
+                print(f'Fetched')
+            except AttributeError:
+                print("A wild attribute error happened")
+
+
+
+    def get_data_from_tweets_ids(self):
+        for i,tw_ids in self.tweets_ids_from_file():
+            data = self.__request_tweet_data(tw_ids,i)
+            self.__parse_and_save_data(data, i)
 
 
 if __name__ == '__main__':
     init_file = sys.argv[1]
     td = TwitterDriver(init_file)
-    td.data()
+    td.get_data_from_tweets_ids()
