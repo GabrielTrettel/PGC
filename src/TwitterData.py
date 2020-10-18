@@ -10,11 +10,11 @@ class TwitterDriver:
 
         self.config_values = self.__parse_keys()
         self.api = self.__create_api_handler()
-
         self.tw_attrs = ['id_str', 'lang', 'retweeted', 'text']
         self.user_attr = ['id_str', 'name', 'screen_name', 'description']
         self.still_compute = True
         self.closing_requests = 0
+        self.line_idx = 0
         signal.signal(signal.SIGINT, self.signal_handler)
 
     def __parse_keys(self):
@@ -27,6 +27,15 @@ class TwitterDriver:
         self.closing_requests += 1
         if self.closing_requests > 3: sys.exit()
         self.still_compute = False
+        self.save_metadata()
+
+
+    def save_metadata(self):
+        self.config_values['download_tweets_from_list']['start_by_line'] = self.line_idx-1
+        data = toml.dumps(self.config_values)
+        with open(self.config_f, "w") as toml_file:
+            toml_file.write(data)
+
 
 
     def __create_api_handler(self):
@@ -56,7 +65,7 @@ class TwitterDriver:
 
             content = line.strip()
             print(f"{i} \t {content} \t", end='')
-
+            self.line_idx = i
             time.sleep(0.1)
             yield i, [content]
 
