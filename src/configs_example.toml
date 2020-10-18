@@ -5,18 +5,8 @@ access_token = ''
 access_token_secret = ''
 
 
-[data_base]
-user = "user name"
-psw  = "psw"
-
-[query]
-# how old we will save twetter query. 
-# Can be a time delta, indicating how many days since today, or a date
-# in iso-format: 'yyyy-mm-dd'
-time = 2
-# how many tweets we will save
-maximum_twts = 5
-# subjects to compose our query
-search = ["covid OR corona OR covid-19 OR pandemia"]
-filter = "retweets"
-language='pt'
+[download_tweets_from_list]
+tweets_list_file = "../../datasets/anderson/tweet_ids.txt"
+saved_tweets_log = "../data/downloaded_tweets"
+save_on = "../data/tweets/"
+start_by_line = 171045
